@@ -1,34 +1,31 @@
 # FROM debian:bullseye-slim
-FROM debian:bookworm-slim
+FROM ubuntu:jammy
 
 SHELL ["/bin/bash", "-xo", "pipefail", "-c"]
 
 # Generate locale C.UTF-8 for postgres and general locale data
 ENV LANG C.UTF-8
-ENV PERFEECTWORK_VERSION=6.0
+ENV PERFEECTWORK_VERSION=7.0
 ENV PERFECTWORK_RELEASE=latest
-ENV CRYPTOGRAPHY_DONT_BUILD_RUST=1
-ENV DEBIAN_FRONTEND=noninteractive
+
+# Retrieve the target architecture to install the correct wkhtmltopdf package
+ARG TARGETARCH
 
 # Install some deps, lessc and less-plugin-clean-css, and wkhtmltopdf
 RUN apt-get update && \
+    DEBIAN_FRONTEND=noninteractive \
     apt-get install -y --no-install-recommends \
-        build-essential \
         ca-certificates \
         curl \
         dirmngr \
         fonts-noto-cjk \
-        gcc \
-        g++ \
-        git \
         gnupg \
         libssl-dev \
-        make \
         node-less \
         npm \
-        python3-dev \
         python3-magic \
         python3-num2words \
+        python3-odf \
         python3-pdfminer \
         python3-pip \
         python3-phonenumbers \
@@ -41,16 +38,24 @@ RUN apt-get update && \
         python3-watchdog \
         python3-xlrd \
         python3-xlwt \
-        xz-utils \
-        wkhtmltopdf \
-    # && curl -o wkhtmltox.deb -sSL https://github.com/wkhtmltopdf/wkhtmltopdf/releases/download/0.12.5/wkhtmltox_0.12.5-1.buster_amd64.deb \
-    # && echo 'ea8277df4297afc507c61122f3c349af142f31e5 wkhtmltox.deb' | sha1sum -c - \
-    # && apt-get install -y --no-install-recommends ./wkhtmltox.deb \
-    # && rm -rf /var/lib/apt/lists/* wkhtmltox.deb \
-    && rm -rf /var/lib/apt/lists/* 
+        xz-utils && \
+    if [ -z "${TARGETARCH}" ]; then \
+    TARGETARCH="$(dpkg --print-architecture)"; \
+    fi; \
+    WKHTMLTOPDF_ARCH=${TARGETARCH} && \
+    case ${TARGETARCH} in \
+    "amd64") WKHTMLTOPDF_ARCH=amd64 && WKHTMLTOPDF_SHA=967390a759707337b46d1c02452e2bb6b2dc6d59  ;; \
+    "arm64")  WKHTMLTOPDF_SHA=90f6e69896d51ef77339d3f3a20f8582bdf496cc  ;; \
+    "ppc64le" | "ppc64el") WKHTMLTOPDF_ARCH=ppc64el && WKHTMLTOPDF_SHA=5312d7d34a25b321282929df82e3574319aed25c  ;; \
+    esac \
+    && curl -o wkhtmltox.deb -sSL https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6.1-3/wkhtmltox_0.12.6.1-3.jammy_${WKHTMLTOPDF_ARCH}.deb \
+    && echo ${WKHTMLTOPDF_SHA} wkhtmltox.deb | sha1sum -c - \
+    && apt-get install -y --no-install-recommends ./wkhtmltox.deb \
+    && rm -rf /var/lib/apt/lists/* wkhtmltox.deb
+
 
 # install latest postgresql-client
-RUN echo 'deb http://apt.postgresql.org/pub/repos/apt/ bookworm-pgdg main' > /etc/apt/sources.list.d/pgdg.list \
+RUN echo 'deb http://apt.postgresql.org/pub/repos/apt/ jammy-pgdg main' > /etc/apt/sources.list.d/pgdg.list \
     && GNUPGHOME="$(mktemp -d)" \
     && export GNUPGHOME \
     && repokey='B97B0AFCAA1A47F044F244A07FCC7D46ACCC4CF8' \
@@ -69,9 +74,9 @@ RUN npm install -g rtlcss \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Odoo and remove odoo files at /usr/lib/python3/dist-packages/odoo*
-ENV ODOO_VERSION 16.0
-ARG ODOO_RELEASE=20231106
-ARG ODOO_SHA=ef0fa4f34bbb1af69733a8df1a19d2756de7916b
+ENV ODOO_VERSION 17.0
+ARG ODOO_RELEASE=20231120
+ARG ODOO_SHA=57b836de2901c4ec5e3de433eb9258024701d255
 RUN curl -o odoo.deb -sSL http://nightly.odoo.com/${ODOO_VERSION}/nightly/deb/odoo_${ODOO_VERSION}.${ODOO_RELEASE}_all.deb \
     && echo "${ODOO_SHA} odoo.deb" | sha1sum -c - \
     && apt-get update \
@@ -85,9 +90,12 @@ COPY ./wait-for-psql.py /
 COPY ./requirements.txt.docker /requirements.txt
 
 # **** Install extra python libraries for PW ****
+# ENV HNSWLIB_NO_NATIVE=1  
+# RUN set -x; \
+#     pip3 install --no-cache-dir --break-system-packages -r /requirements.txt 
 ENV HNSWLIB_NO_NATIVE=1  
 RUN set -x; \
-    pip3 install --no-cache-dir --break-system-packages -r /requirements.txt 
+    pip3 install --no-cache-dir -r /requirements.txt 
 
 # Set permissions and Mount /var/lib/odoo to allow restoring filestore and /mnt/extra-addons for users addons
 RUN chown odoo /entrypoint.sh \
@@ -109,7 +117,6 @@ RUN chmod +x entrypoint.sh \
 
 # Set default user when running the container
 USER odoo
-
 
 ENTRYPOINT ["/entrypoint.sh"]
 CMD ["odoo"]
