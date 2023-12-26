@@ -18,3 +18,4 @@ PyPDF2
 pyOpenSSL
 python-dotenv
 pysftp==0.2.8
+tiktoken
